@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SUBJECT_101 // SENSORY_CALIBRATION</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { overflow:hidden; background:#000; cursor:none; }
+canvas { display:block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ═══════════════════════════════════════════════════
+//  SUBJECT 101 // SENSORY INPUT CALIBRATION
+//  [CLASSIFICATION: INTERNAL — DO NOT DISTRIBUTE]
+// ═══════════════════════════════════════════════════
+
+const cv = document.getElementById('c');
+const cx = cv.getContext('2d');
+let W = cv.width = innerWidth;
+let H = cv.height = innerHeight;
+window.addEventListener('resize', () => { W = cv.width = innerWidth; H = cv.height = innerHeight; });
+
+// ── GLITCH STATE ────────────────────────────────────
+const g = {
+  shade: 0,           // accumulated darkness [0,0.7]
+  shakeAmt: 0,        // screen shake magnitude
+  chromaOff: 0,       // chromatic aberration pixels
+  noiseLevel: 0,      // static overlay alpha
+  staticFrames: 0,    // full white-noise takeover (frames)
+  active: false,      // glitch message active
+  timer: 0,           // glitch message lifetime
+  msg: '',            // current hidden message
+  alpha: 0,           // message alpha
+  nextGlitch: 3.5,    // countdown to next passive glitch
+  slowFactor: 1,      // time dilation
+  flicker: 1,         // CRT brightness multiplier
+  glitchLines: [],    // horizontal displacement artifacts
+  scanOffset: 0,      // scanline phase offset
+};
+
+// ── PHYSICS ─────────────────────────────────────────
+const p = {
+  x: 0, y: 0, vx: 0, vy: 0, s: 1,
+  onGround: false, gravDir: 1,
+  history: [],        // circular buffer for mimic
+};
+
+// ── MIMIC ────────────────────────────────────────────
+const mimic = { x: 0, y: 0, on: false, alpha: 0 };
+const MIMIC_LAG = 2.2; // seconds behind
+
+// ── FAKE METADATA ────────────────────────────────────
+const meta = {
+  lat:  37.4219 + (Math.random()-.5) * .001,
+  lng: -122.084 + (Math.random()-.5) * .001,
+  mem: 78 + Math.floor(Math.random() * 14),
+  pid: 1101 + Math.floor(Math.random() * 900),
+  hr: 71, hrTarget: 71,
+  freq: 432,
+  tick: 0,
+};
+
+// ── HIDDEN MESSAGES (the walls remember) ─────────────
+const MSGS = [
+  'THEY SEE YOU JUMP','DO NOT LOOK LEFT','WE KNOW YOUR IP',
+  'HEARTRATE ANOMALY DETECTED','SUBJECT 101 IS OBSERVED',
+  'THE MIMIC IS NOT YOU','EXIT PROTOCOL DENIED','FREQUENCY LOCKED',
+  'PATTERN LOGGED','DO NOT TRUST THE DOOR','BLINK RATE: ELEVATED',
+  'MEMORY LEAK // SECTOR_7','SIGNAL TRACED TO HOST',
+  'YOU HAVE BEEN CATALOGUED','MOVEMENT ARCHIVED',
+  'COMPLIANCE REQUIRED','THEY ARE IN THE WALLS',
+  'EYES BEHIND THE GRID','ITERATION ' + (Math.floor(Math.random()*99)+2),
+  'THIS IS NOT THE FIRST TIME',
+];
+
+// ── GLOBAL TIME & STATE ──────────────────────────────
+let t = 0;            // global time seconds
+let gameRestarts = 0;
+let baseLum = 195;    // decreases each restart, controls overall brightness
+let state = 'archive'; // 'archive' | 'intro' | 'game' | 'error'
+
+// ── SOVIET ARCHIVE DOCUMENTS ──────────────────────────
+const DOCS = [
+  {
+    stamp: 'СОВЕРШЕННО СЕКРЕТНО',
+    stampEn: 'TOP SECRET',
+    org: 'КГБ СССР  //  ГЛАВНОЕ УПРАВЛЕНИЕ',
+    orgEn: 'KGB USSR  //  CHIEF DIRECTORATE',
+    ref: 'Ref. № ЦА-7731/101-Б  //  Dept. P-9  //  Copy 1 of 1',
+    date: '14 НОЯБРЯ 1978  [14 NOVEMBER 1978]',
+    subject: 'RE: ПРОГРАММА "СЕНСОРНЫЙ РАЗЛОМ"',
+    subjectEn: 'RE: PROGRAMME "SENSORY FRACTURE" — SUBJECT INTAKE NOTICE',
+    body: [
+      'TO: Laboratory Director, Facility ОБЪЕКТ-7, Novosibirsk Oblast',
+      'FROM: Central Experimental Division, Moscow',
+      '',
+      'Subject designated: ОБЪЕКТ-101  [SUBJECT 101]',
+      'Age: ██  //  Sex: ██  //  Clearance: NONE (civilian conscript)',
+      '',
+      'Subject has been selected following anomalous results during',
+      'routine psychometric screening at ████████ Institute.',
+      'EEG delta-band readings exceeded threshold by factor of 3.1.',
+      '',
+      'Subject is to be transferred to Room 7 of Facility ОБЪЕКТ-7',
+      'no later than ██ ДЕКАБРЯ 1978. Upon arrival, begin Protocol',
+      '"СЕНСОРНАЯ КАЛИБРОВКА" [SENSORY CALIBRATION] immediately.',
+      '',
+      'Subject must not be informed of the nature of the experiment.',
+      'Subject must not be permitted to exit via the designated door.',
+      '',
+      'Note: ████████████████████████████████████████████████████',
+      '      ████████████████ DO NOT ENGAGE VERBALLY ██████████',
+      '      ████████████████████████████████████████████████████',
+      '',
+      'This document is to be destroyed upon reading.',
+      '',
+      '                              — Col. ██████ СОКОЛОВ',
+    ],
+    redact: [16, 17, 18],
+    seal: 'КГБ',
+  },
+  {
+    stamp: 'ДЛЯ СЛУЖЕБНОГО ПОЛЬЗОВАНИЯ',
+    stampEn: 'FOR OFFICIAL USE ONLY',
+    org: 'ОБЪЕКТ-7  //  НЕЙРОСЕНСОРНАЯ ЛАБОРАТОРИЯ',
+    orgEn: 'FACILITY-7  //  NEUROSENSORY LABORATORY  //  NOVOSIBIRSK',
+    ref: 'Lab Log № 7-101-C  //  Session 1 of ██',
+    date: '██ ДЕКАБРЯ 1978',
+    subject: 'ЖУРНАЛ НАБЛЮДЕНИЙ — ОБЪЕКТ-101, ДЕНЬ 1',
+    subjectEn: 'OBSERVATION LOG — SUBJECT 101, DAY 1',
+    body: [
+      '09:14 — Subject escorted to Room 7. Subject is calm. Unaware.',
+      '09:22 — Calibration sequence initiated. Key-response mapping',
+      '         loaded into terminal. Subject given no instructions.',
+      '',
+      '09:31 — Subject begins pressing keys. Response: EXPECTED.',
+      '09:44 — Gravity inversion event triggered. Subject reacted.',
+      '         Heart rate: 94 BPM. Noted: subject adapted quickly.',
+      '',
+      '10:02 — ANOMALY LOGGED: Second movement trace detected on',
+      '         monitoring grid. No second subject is present in Room 7.',
+      '         Trace mimics Subject 101 with approx. 2.2 second delay.',
+      '',
+      '10:07 — Dr. ████████ instructed us to continue logging.',
+      '         Quote: "It has happened before. Do not acknowledge it."',
+      '',
+      '10:33 — Subject approached the exit door. PROTOCOL ENFORCED.',
+      '         Subject returned to room. Session continues.',
+      '',
+      '11:59 — End of Day 1. Subject 101 has not spoken.',
+      '         Recommendation: ██████████████████████████████████',
+      '',
+      'Observer signature: ___________________________  [REDACTED]',
+    ],
+    redact: [17],
+    seal: 'ОБЪ',
+  },
+  {
+    stamp: 'АНОМАЛЬНЫЙ ОТЧЁТ',
+    stampEn: 'ANOMALY REPORT',
+    org: 'ОБЪЕКТ-7  //  СЕКТОР АНАЛИЗА ЧАСТОТ',
+    orgEn: 'FACILITY-7  //  FREQUENCY ANALYSIS SECTOR',
+    ref: 'Anomaly File: ЧА-432-101  //  Priority: MAXIMUM',
+    date: '██ ЯНВАРЯ 1979',
+    subject: 'КРИТИЧЕСКОЕ ОТКЛОНЕНИЕ — ОБЪЕКТ-101',
+    subjectEn: 'CRITICAL DEVIATION — SUBJECT 101  //  EYES ONLY',
+    body: [
+      'On Day ██ of calibration, the following was recorded:',
+      '',
+      '— Subject 101 began responding to keys NOT ASSIGNED in the map.',
+      '— Unmapped keystrokes produced measurable environmental response.',
+      '— Room luminance decreased by ~5% per anomalous input.',
+      '— After 14 unmapped inputs: room darkness exceeded safe threshold.',
+      '',
+      'Sensor array readings at time of incident:',
+      '  FREQUENCY LOCK..........: 432 Hz  [UNCHANGED]',
+      '  SUBJECT HEART RATE......: ██ BPM  [DATA CORRUPTED]',
+      '  SECOND TRACE INTENSITY..: 87%  [CRITICAL]',
+      '  ROOM LUMINANCE..........: 31%  [BELOW THRESHOLD]',
+      '',
+      'At 23:14, all cameras in Room 7 recorded a simultaneous',
+      'frame of ████████████████████████████████████████████',
+      '████████████████████████████████████████████████████',
+      '',
+      'Three technicians who reviewed the footage were placed on',
+      'mandatory leave. Their reports have been ██████████████.',
+      '',
+      'Experiment status: CONTINUING PER DIRECTIVE 77-C.',
+      'Subject 101 status: CONTAINED. COMPLIANT. UNAWARE.',
+    ],
+    redact: [13, 14, 17],
+    seal: 'ЧА',
+  },
+  {
+    stamp: 'ЗАКРЫТО',
+    stampEn: 'FILE CLOSED  //  FACILITY DECOMMISSIONED',
+    org: 'АРХИВ КГБ СССР  //  ЦЕНТРАЛЬНОЕ ХРАНИЛИЩЕ',
+    orgEn: 'KGB USSR CENTRAL ARCHIVE  //  DIGITISED 1991',
+    ref: 'Archive Ref: ЦА-7731/101  //  Box 14  //  Folder 9',
+    date: '09 МАЯ 1991  [ARCHIVE DIGITISATION DATE]',
+    subject: 'ЗАКРЫТИЕ ОБЪЕКТА-7  —  ИТОГОВАЯ ЗАПИСЬ',
+    subjectEn: 'CLOSURE OF FACILITY-7  —  FINAL RECORD',
+    body: [
+      'Facility ОБЪЕКТ-7 was decommissioned on ██ МАРТА 1983.',
+      'All personnel files are sealed for 100 years.',
+      '',
+      'Subject 101 records:',
+      '  Sessions completed.......: ██  [CLASSIFIED]',
+      '  Final status.............: ██████████████████████',
+      '  Location (current).......: UNKNOWN',
+      '',
+      'Note appended by archivist, 1991:',
+      '',
+      '"When digitising this file, the scanning terminal produced',
+      ' output on its own. The text read:',
+      '',
+      '        DO NOT EXIT THE TERMINAL.',
+      '        WE ARE MONITORING THE FREQUENCY.',
+      '        THIS IS NOT THE FIRST TIME.',
+      '',
+      ' The terminal was not connected to any network.',
+      ' The terminal had not been powered on.',
+      ' I have not returned to that room."',
+      '',
+      '                              — Archivist ███████, 1991',
+      '',
+      '[ END OF FILE — PRESS ANY KEY TO CONTINUE ]',
+    ],
+    redact: [5],
+    seal: 'АРХ',
+  },
+];
+
+const archive = {
+  doc: 0,           // current document index
+  charIdx: 0,       // characters revealed so far
+  timer: 0,         // time on current doc
+  phase: 0,         // 0=typing, 1=pause, 2=fadeout
+  fadeAlpha: 1,
+  skipHeld: false,
+};
+
+const archiveFullText = (d) => {
+  const lines = [
+    d.org, d.orgEn, '', d.ref, d.date, '',
+    d.subject, d.subjectEn, '',
+    ...d.body
+  ];
+  return lines;
+};
+
+// ── INTRO ─────────────────────────────────────────────
+const intro = {
+  timer: 0, phase: 0, load: 0,
+  lines: [
+    '',
+    '> INITIALIZING EXPERIMENT ENVIRONMENT...',
+    '',
+    '> SUBJECT 101: SENSORY INPUT CALIBRATION',
+    '> SESSION ID: ' + Math.floor(Math.random()*0xFFFFFF).toString(16).toUpperCase(),
+    '',
+    '> WARNING: DO NOT EXIT THE TERMINAL.',
+    '> WE ARE MONITORING THE FREQUENCY.',
+    '',
+    '> PSYCHOLOGICAL BASELINE: RECORDING',
+    '> BEHAVIORAL SIGNATURE: LOGGING',
+    '> OBSERVATION STATUS: ACTIVE',
+    '',
+    '> PRESS ANY KEY TO BEGIN CALIBRATION.',
+  ],
+};
+
+// ── ERROR SCREEN ──────────────────────────────────────
+let err = null;
+const triggerError = () => {
+  state = 'error';
+  gameRestarts++;
+  baseLum = Math.max(72, baseLum - 22);
+  g.shade = Math.min(g.shade + 0.07, 0.65);
+  err = {
+    phase: 0,     // 0=typing, 1=pause, 2=fade
+    timer: 0, shown: 0, fadeAlpha: 1,
+    lines: [
+      `> SYSTEM_ERROR 0x${Math.floor(Math.random()*0xFFFFFF).toString(16).toUpperCase().padStart(6,'0')}`,
+      `> PROCESS:  SUBJECT_101_SENSORY_CAL.EXE`,
+      `> THREAD:   MOVEMENT_TRACKER_[ACTIVE]`,
+      ``,
+      `> BIOMETRIC SNAPSHOT [TIMESTAMP: ${Date.now()}]:`,
+      `  HEART_RATE.......: ${Math.round(meta.hr + (Math.random()-.5)*8)} BPM  [ELEVATED]`,
+      `  NEURAL_SYNC......: ${(Math.random()*35+55).toFixed(1)}%`,
+      `  CORTISOL_INDEX...: ${(Math.random()*2.1+0.9).toFixed(3)} mg/dL`,
+      `  EEG_DELTA_BAND...: ANOMALOUS`,
+      `  PUPIL_DILATION...: ${(Math.random()*3+4).toFixed(1)} mm`,
+      ``,
+      `> WARNING: EXIT THRESHOLD EXCEEDED`,
+      `> SUBJECT CONTAINMENT: REINSTATING`,
+      ``,
+      `> NOTE: THIS IS ITERATION ${gameRestarts+1}.`,
+      `> NOTE: WE HAVE ALWAYS BEEN WATCHING.`,
+      ``,
+      `> CALIBRATION LOOP: RESTARTING...`,
+    ],
+  };
+  playGlitchTone(); g.staticFrames = 8;
+};
+
+// ── GEOMETRY ──────────────────────────────────────────
+const WALL = 64, FLOOR = 64;
+
+const platforms = () => [
+  { x: WALL+(W-WALL*2)*0.06, y: WALL+(H-WALL-FLOOR)*0.58, w:(W-WALL*2)*0.17, h:13 },
+  { x: WALL+(W-WALL*2)*0.34, y: WALL+(H-WALL-FLOOR)*0.40, w:(W-WALL*2)*0.19, h:13 },
+  { x: WALL+(W-WALL*2)*0.63, y: WALL+(H-WALL-FLOOR)*0.60, w:(W-WALL*2)*0.14, h:13 },
+  { x: WALL+(W-WALL*2)*0.24, y: WALL+(H-WALL-FLOOR)*0.23, w:(W-WALL*2)*0.14, h:13 },
+  { x: WALL+(W-WALL*2)*0.72, y: WALL+(H-WALL-FLOOR)*0.35, w:(W-WALL*2)*0.13, h:13 },
+];
+
+const door = () => ({ x: W-WALL, y: WALL+(H-WALL-FLOOR)*0.3, h:(H-WALL-FLOOR)*0.44 });
+
+const duck = () => ({ x: WALL+(W-WALL*2)*0.62, y: H-FLOOR-54, w:54, h:54 });
+
+// ── AUDIO ─────────────────────────────────────────────
+let AC;
+const aud = () => { if(!AC) AC=new(window.AudioContext||window.webkitAudioContext)(); if(AC.state==='suspended') AC.resume(); return AC; };
+
+const playDrone = (hz=55, dur=2.0, vol=0.07) => {
+  try {
+    const a=aud(), o=a.createOscillator(), gn=a.createGain();
+    const vib=a.createOscillator(), vg=a.createGain();
+    vib.frequency.value=0.3+Math.random()*0.4; vg.gain.value=hz*0.006;
+    vib.connect(vg); vg.connect(o.frequency);
+    o.type='sine'; o.frequency.value=hz;
+    const t0=a.currentTime;
+    gn.gain.setValueAtTime(0,t0); gn.gain.linearRampToValueAtTime(vol,t0+0.35);
+    gn.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+    o.connect(gn); gn.connect(a.destination);
+    o.start(t0); vib.start(t0); o.stop(t0+dur); vib.stop(t0+dur);
+  } catch(e){}
+};
+
+const playInfrasound = () => {
+  try {
+    const a=aud(), hz=14+Math.random()*18;
+    const o=a.createOscillator(), gn=a.createGain();
+    o.type='sine'; o.frequency.value=hz;
+    gn.gain.setValueAtTime(0.18,a.currentTime);
+    gn.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+2.5);
+    o.connect(gn); gn.connect(a.destination);
+    o.start(); o.stop(a.currentTime+2.5);
+  } catch(e){}
+};
+
+const playCreak = () => {
+  try {
+    const a=aud(), buf=a.createBuffer(1,a.sampleRate*0.9,a.sampleRate), d=buf.getChannelData(0);
+    for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/d.length,1.8)*0.5;
+    const s=a.createBufferSource(), gn=a.createGain(), f=a.createBiquadFilter();
+    f.type='lowpass'; f.frequency.value=200;
+    s.buffer=buf; s.connect(f); f.connect(gn); gn.connect(a.destination);
+    gn.gain.value=0.45; s.start();
+  } catch(e){}
+};
+
+const playStaticBurst = (dur=0.12) => {
+  try {
+    const a=aud(), buf=a.createBuffer(1,Math.floor(a.sampleRate*dur),a.sampleRate), d=buf.getChannelData(0);
+    for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*0.9;
+    const s=a.createBufferSource(), gn=a.createGain(), f=a.createBiquadFilter();
+    f.type='bandpass'; f.frequency.value=2400; f.Q.value=0.5;
+    s.buffer=buf; s.connect(f); f.connect(gn); gn.connect(a.destination);
+    gn.gain.setValueAtTime(0.35,a.currentTime);
+    gn.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+dur);
+    s.start(); s.stop(a.currentTime+dur+0.05);
+  } catch(e){}
+};
+
+const playGlitchTone = () => {
+  [22, 36, 48, 55].forEach(hz => playDrone(hz, 3.0, 0.05));
+};
+
+// ── KEY MAP ───────────────────────────────────────────
+let kmap = {};
+
+// Action pool — eerie, minimal, unsettling
+const actions = [
+  // 0: jump — opera is gone, now it's a bare drone
+  () => { if(p.onGround){ p.vy=-15*p.gravDir; playDrone(220,0.3,0.1); glitch('MOVEMENT LOGGED'); } },
+  // 1: gravity flip
+  () => { p.gravDir*=-1; g.chromaOff=14; g.shakeAmt=18; playGlitchTone(); glitch('INVERSION EVENT // LOGGED'); },
+  // 2: teleport
+  () => { p.x=WALL+55+Math.random()*(W-WALL*2-110); p.y=WALL+55; p.vx=p.vy=0; g.staticFrames=5; playStaticBurst(0.18); glitch('COORDINATES REASSIGNED'); },
+  // 3: screen 5% darker
+  () => { g.shade=Math.min(g.shade+0.05,0.65); playDrone(33,2.0,0.06); },
+  // 4: boost right
+  () => { p.vx+=15; playDrone(180,0.2,0.08); },
+  // 5: boost left
+  () => { p.vx-=15; playDrone(180,0.2,0.08); },
+  // 6: structural shake
+  () => { g.shakeAmt=28; playCreak(); glitch('STRUCTURAL ANOMALY DETECTED'); },
+  // 7: noise surge
+  () => { g.noiseLevel=0.38; g.staticFrames=3; playStaticBurst(0.22); },
+  // 8: slow motion toggle
+  () => { g.slowFactor=g.slowFactor===1?0.14:1; glitch(g.slowFactor<1?'TIME DILATION: ACTIVE':'TIME: RESTORED'); playDrone(40,1.4,0.07); },
+  // 9: chroma burst
+  () => { g.chromaOff=22; g.shakeAmt=10; playGlitchTone(); },
+  // 10: walk right
+  () => { p.vx+=8; },
+  // 11: walk left
+  () => { p.vx-=8; },
+  // 12: darkness surge
+  () => { g.shade=Math.min(g.shade+0.11,0.65); g.noiseLevel=0.2; playCreak(); glitch('LUMINANCE THRESHOLD EXCEEDED'); },
+  // 13: partial restore (feels like they're "fixing" something)
+  () => { g.shade=Math.max(g.shade-0.08,0); playDrone(110,0.6,0.05); },
+  // 14: scramble metadata
+  () => { meta.lat+=(Math.random()-.5)*0.06; meta.lng+=(Math.random()-.5)*0.06; meta.pid=Math.floor(Math.random()*9999); playDrone(55,0.8,0.04); },
+  // 15: big jump
+  () => { p.vy=-21*p.gravDir; p.vx=(Math.random()-.5)*16; g.shakeAmt=15; playDrone(280,0.4,0.12); glitch('TRAJECTORY SPIKE DETECTED'); },
+  // 16: SILENT — infrasound + maybe glitch
+  () => { playInfrasound(); if(Math.random()<0.35) g.shakeAmt=5; if(Math.random()<0.3) glitch(MSGS[Math.floor(Math.random()*MSGS.length)]); },
+  // 17: glitch lines
+  () => { spawnGlitchLines(6); playStaticBurst(0.08); },
+  // 18: HR spike
+  () => { meta.hrTarget=95+Math.floor(Math.random()*30); playDrone(28,1.8,0.06); glitch('CARDIAC ANOMALY // SUBJECT 101'); },
+];
+
+const KEYS = 'abcdefghijklmnopqrstuvwxyz1234567890 '.split('')
+  .concat(['arrowleft','arrowright','arrowup','arrowdown','enter','shift','tab']);
+
+const shuffleMap = () => {
+  const pool=[...actions].sort(()=>Math.random()-.5);
+  kmap={};
+  KEYS.forEach((k,i) => {
+    // ~28% of keys get the silent action
+    kmap[k] = Math.random()<0.28 ? actions[16] : pool[i%pool.length];
+  });
+};
+shuffleMap();
+
+// ── HELPERS ───────────────────────────────────────────
+const glitch = (msg) => {
+  g.active=true; g.timer=1.0+Math.random()*1.5;
+  g.msg=msg||MSGS[Math.floor(Math.random()*MSGS.length)]; g.alpha=1;
+};
+
+const spawnGlitchLines = (n=4) => {
+  g.glitchLines.push(...Array.from({length:n},()=>({
+    y: Math.random()*H, h:2+Math.floor(Math.random()*9),
+    off:(Math.random()-.5)*40, life:0.2+Math.random()*0.5,
+    maxLife:0.2+Math.random()*0.5,
+  })));
+};
+
+const lum = (mul=1) => {
+  const base = Math.round(baseLum * (1-g.shade) * g.flicker * mul);
+  return Math.max(4, Math.min(255, base));
+};
+
+const mono = (v, a=1) => `rgba(${v},${v},${v},${a})`;
+// phosphor-green tint for extra unease
+const ph = (a=1) => {
+  const l = lum();
+  return `rgba(${Math.round(l*0.72)},${l},${Math.round(l*0.78)},${a})`;
+};
+
+// ── RESET ─────────────────────────────────────────────
+const resetP = () => {
+  p.x=W*0.22; p.y=H*0.42; p.vx=p.vy=0; p.s=1; p.gravDir=1; p.onGround=false;
+  p.history=[];
+  g.shakeAmt=0; g.chromaOff=0; g.noiseLevel=0; g.staticFrames=0;
+  g.slowFactor=1; g.glitchLines=[];
+  mimic.on=false; mimic.alpha=0;
+};
+
+// ── UPDATE ────────────────────────────────────────────
+let last=0;
+
+const update = dt => {
+  const ef = dt * g.slowFactor;
+
+  // Physics
+  p.vy += 0.56 * p.gravDir * ef * 60;
+  p.vx *= 0.88;
+  p.vx = Math.max(Math.min(p.vx, 22), -22);
+  p.vy = Math.max(Math.min(p.vy, 22), -22);
+  p.x += p.vx * ef * 60;
+  p.y += p.vy * ef * 60;
+  p.onGround = false;
+
+  // Boundaries
+  if(p.y+18 > H-FLOOR){ p.y=H-FLOOR-18; if(p.vy>0)p.vy*=-0.12; if(p.gravDir===1)p.onGround=true; }
+  if(p.y-18 < WALL)   { p.y=WALL+18;    if(p.vy<0)p.vy*=-0.12; if(p.gravDir===-1)p.onGround=true; }
+  if(p.x-18 < WALL)   { p.x=WALL+18;    p.vx*=-0.4; }
+  if(p.x+18 > W-WALL) {
+    const d=door();
+    if(p.y>d.y && p.y<d.y+d.h) { triggerError(); return; }
+    p.x=W-WALL-18; p.vx*=-0.4;
+  }
+
+  // Platforms
+  for(const pl of platforms()) {
+    if(p.x+18>pl.x && p.x-18<pl.x+pl.w && p.y+18>pl.y && p.y-18<pl.y+pl.h) {
+      const ovX=Math.min(p.x+18-pl.x, pl.x+pl.w-(p.x-18));
+      const ovY=Math.min(p.y+18-pl.y, pl.y+pl.h-(p.y-18));
+      if(ovY<=ovX){
+        if(p.y<pl.y+pl.h/2){ p.y=pl.y-18; if(p.vy>0)p.vy=0; if(p.gravDir===1)p.onGround=true; }
+        else                { p.y=pl.y+pl.h+18; if(p.vy<0)p.vy*=-0.12; if(p.gravDir===-1)p.onGround=true; }
+      } else {
+        p.x = p.x<pl.x+pl.w/2 ? pl.x-18 : pl.x+pl.w+18;
+        p.vx *= -0.4;
+      }
+    }
+  }
+
+  // Duck → reshuffle
+  const dk=duck();
+  if(p.x+18>dk.x && p.x-18<dk.x+dk.w && p.y+18>dk.y && p.y-18<dk.y+dk.h) {
+    shuffleMap(); g.staticFrames=7; g.shakeAmt=22;
+    playStaticBurst(0.25); glitch('KEY SEQUENCE CORRUPTED // RESHUFFLED');
+  }
+
+  // Record history for mimic
+  p.history.push({x:p.x, y:p.y, t});
+  if(p.history.length > 800) p.history.shift();
+
+  // Update mimic from history
+  const mpos = p.history.find(h => t - h.t >= MIMIC_LAG);
+  if(mpos) {
+    mimic.x=mpos.x; mimic.y=mpos.y;
+    if(!mimic.on && Math.random()<0.004) mimic.on=true; // fades in gradually
+    if(mimic.on) mimic.alpha=Math.min(mimic.alpha+dt*0.3, 0.42);
+  }
+  // Mimic flickers out suddenly sometimes
+  if(Math.random() < 0.0015) { mimic.on=!mimic.on; if(!mimic.on) mimic.alpha=0; }
+
+  // Glitch decay
+  if(g.active){ g.timer-=dt; g.alpha=Math.max(0,g.alpha-dt*0.55); if(g.timer<=0){g.active=false;} }
+  g.chromaOff *= 0.86;
+  g.shakeAmt  *= 0.79;
+  g.noiseLevel *= 0.88;
+  if(g.staticFrames>0) g.staticFrames--;
+
+  // Passive glitch cycle
+  g.nextGlitch -= dt;
+  if(g.nextGlitch <= 0) {
+    glitch(MSGS[Math.floor(Math.random()*MSGS.length)]);
+    g.nextGlitch = 4.5 + Math.random()*9;
+    if(Math.random()<0.32) playDrone(24+Math.random()*28, 2.4, 0.06);
+    if(Math.random()<0.22) g.shakeAmt=9;
+    if(Math.random()<0.18) { g.noiseLevel=0.26; g.staticFrames=3; }
+    if(Math.random()<0.45) spawnGlitchLines(3+Math.floor(Math.random()*5));
+  }
+
+  // Update glitch lines
+  g.glitchLines = g.glitchLines.filter(l => { l.life-=dt; return l.life>0; });
+
+  // Fake metadata drift
+  meta.lat  += (Math.random()-.5)*0.000038;
+  meta.lng  += (Math.random()-.5)*0.000038;
+  if(Math.random()<0.04) meta.mem = Math.max(10,Math.min(99, meta.mem+(Math.random()>.5?1:-1)));
+  if(Math.random()<0.025) meta.hrTarget = 62+Math.floor(Math.random()*48);
+  meta.hr  += (meta.hrTarget-meta.hr)*0.045;
+  meta.tick++;
+
+  // CRT flicker
+  g.flicker = Math.random()<0.012 ? 0.55+Math.random()*0.3 : 1.0-Math.random()*0.028;
+  g.scanOffset = (g.scanOffset + dt*28) % 3;
+};
+
+// ── DRAW HELPERS ──────────────────────────────────────
+
+const scanlines = () => {
+  cx.save();
+  for(let y=0; y<H; y+=3) {
+    const a = 0.10 + (Math.random()<0.02 ? 0.18 : 0);
+    cx.fillStyle = `rgba(0,0,0,${a})`;
+    cx.fillRect(0, y, W, 1.4);
+  }
+  cx.restore();
+};
+
+const noise = (a) => {
+  if(a < 0.01) return;
+  const id=cx.createImageData(W,H), d=id.data;
+  for(let i=0;i<d.length;i+=4){
+    const v=Math.random()>0.5?255:0; d[i]=d[i+1]=d[i+2]=v; d[i+3]=Math.round(a*255);
+  }
+  cx.putImageData(id,0,0);
+};
+
+const vignette = () => {
+  const gr=cx.createRadialGradient(W/2,H/2,H*0.28,W/2,H/2,H*0.82);
+  gr.addColorStop(0,'rgba(0,0,0,0)');
+  gr.addColorStop(1,`rgba(0,0,0,${0.7+g.shade*0.25})`);
+  cx.fillStyle=gr; cx.fillRect(0,0,W,H);
+};
+
+const glitchLines = () => {
+  for(const l of g.glitchLines) {
+    const a = (l.life/l.maxLife)*0.85;
+    try {
+      cx.save(); cx.globalAlpha=a;
+      const strip=cx.getImageData(0,Math.max(0,l.y),W,Math.max(1,l.h));
+      cx.putImageData(strip, l.off, Math.max(0,l.y));
+      cx.restore();
+    } catch(e){ cx.restore(); }
+  }
+};
+
+// ── DRAW ROOM ─────────────────────────────────────────
+const drawRoom = () => {
+  const l = lum();
+  // BG
+  cx.fillStyle=`rgb(${Math.round(l*0.07)},${Math.round(l*0.07)},${Math.round(l*0.08)})`; cx.fillRect(0,0,W,H);
+
+  // Faint grid
+  cx.strokeStyle=`rgba(${l},${l},${l},0.04)`; cx.lineWidth=1;
+  for(let x=WALL;x<W-WALL;x+=44){cx.beginPath();cx.moveTo(x,WALL);cx.lineTo(x,H-FLOOR);cx.stroke();}
+  for(let y=WALL;y<H-FLOOR;y+=44){cx.beginPath();cx.moveTo(WALL,y);cx.lineTo(W-WALL,y);cx.stroke();}
+
+  // Walls
+  const wd=Math.round(l*0.13);
+  cx.fillStyle=`rgb(${wd},${wd},${Math.round(l*0.15)})`;
+  cx.fillRect(0,0,WALL,H); cx.fillRect(W-WALL,0,WALL,H);
+  cx.fillStyle=`rgb(${Math.round(l*0.15)},${Math.round(l*0.15)},${Math.round(l*0.17)})`;
+  cx.fillRect(0,0,W,WALL);
+  cx.fillStyle=`rgb(${Math.round(l*0.17)},${Math.round(l*0.17)},${Math.round(l*0.19)})`;
+  cx.fillRect(0,H-FLOOR,W,FLOOR);
+
+  // Wall text — always visible, very faint, like the room is annotated
+  cx.font='10px Courier New'; cx.textAlign='center';
+  cx.fillStyle=`rgba(${l},${l},${l},0.07)`;
+  cx.fillText('SECTOR_7 // EXPERIMENT_LOOP_'+(gameRestarts+1)+' // OBSERVATION: ACTIVE', W/2, WALL/2+4);
+  cx.fillText('SUBJECT_101 // DO_NOT_EXIT // FREQUENCY: 432Hz // COMPLIANCE_REQUIRED', W/2, H-FLOOR/2+4);
+
+  // Platforms
+  for(const pl of platforms()) {
+    const pa=0.5+Math.random()*0.08;
+    cx.fillStyle=`rgba(${l},${l},${l},${pa})`;
+    cx.fillRect(pl.x,pl.y,pl.w,pl.h);
+    // "label" above each platform
+    cx.font='8px Courier New'; cx.textAlign='left';
+    cx.fillStyle=`rgba(${l},${l},${l},0.22)`;
+    cx.fillText('//SURFACE_'+Math.floor(pl.x/100),pl.x+4,pl.y-5);
+  }
+
+  // Subtle "hidden" image in the walls — only visible on glitch
+  if(g.active && g.alpha > 0.4) {
+    cx.save(); cx.globalAlpha=g.alpha*0.12;
+    cx.font='bold 80px Courier New'; cx.textAlign='center'; cx.fillStyle=`rgb(${l},${l},${l})`;
+    cx.fillText(g.msg, W/2+(Math.random()-.5)*8, H/2+(Math.random()-.5)*8);
+    cx.restore();
+  }
+};
+
+const drawDoor = () => {
+  const d=door(), l=lum();
+  cx.strokeStyle=`rgba(${l},${l},${l},0.65)`; cx.lineWidth=2;
+  cx.strokeRect(d.x,d.y,WALL,d.h);
+  cx.fillStyle=`rgba(${l},${l},${l},0.06)`; cx.fillRect(d.x,d.y,WALL,d.h);
+  cx.setLineDash([4,8]);
+  cx.strokeStyle=`rgba(${l},${l},${l},0.28)`;
+  cx.beginPath(); cx.moveTo(d.x+WALL/2,d.y+8); cx.lineTo(d.x+WALL/2,d.y+d.h-8); cx.stroke();
+  cx.setLineDash([]);
+  cx.font='9px Courier New'; cx.textAlign='center';
+  cx.fillStyle=`rgba(${l},${l},${l},0.5)`;
+  cx.fillText('EXIT',d.x+WALL/2,d.y-7);
+  cx.fillStyle=`rgba(${l},${l},${l},0.35)`;
+  cx.fillText('PROTOCOL: DENIED',d.x+WALL/2,d.y-18);
+};
+
+const drawDuck = () => {
+  const dk=duck(), l=lum();
+  const x=dk.x+dk.w/2, y=dk.y+dk.h/2;
+  const bob=Math.sin(t*1.9)*2.5;
+  cx.save(); cx.translate(x,y+bob);
+  // Pixelated grid duck
+  const cells=[
+    [0,0,1,1,1,0],[0,1,1,1,1,1],[1,1,1,1,1,1],
+    [0,1,1,1,1,0],[0,0,1,1,0,0],[0,0,1,0,0,0]
+  ];
+  const cs=9;
+  cells.forEach((row,ry) => row.forEach((cell,rx) => {
+    if(!cell) return;
+    const a = 0.4+Math.random()*0.15;
+    cx.fillStyle=`rgba(${l},${l},${l},${a})`;
+    cx.fillRect(-dk.w/2+rx*cs,-dk.h/2+ry*cs,cs-1,cs-1);
+  }));
+  cx.font='8px Courier New'; cx.textAlign='center';
+  cx.fillStyle=`rgba(${l},${l},${l},0.38)`;
+  cx.fillText('⚠ RESET_TRIGGER',0,dk.h/2+14);
+  cx.restore();
+};
+
+// ── DRAW THE FRAGMENT (player) ────────────────────────
+// A pixelated shape that "decoheres" on glitch
+const FRAG_CELLS = [
+  [-1,-2],[0,-2],[1,-2],
+  [-2,-1],[-1,-1],[0,-1],[1,-1],[2,-1],
+  [-2,0],[-1,0],[0,0],[1,0],[2,0],
+  [-1,1],[0,1],[1,1],
+  [-2,2],[0,2],[1,2],
+];
+
+const drawFragment = () => {
+  const l=lum();
+  cx.save(); cx.translate(Math.round(p.x), Math.round(p.y));
+
+  const isGlitching = g.chromaOff > 2;
+  const jit = isGlitching ? Math.random()*5-2.5 : 0;
+
+  FRAG_CELLS.forEach(([dx,dy],i) => {
+    const a=0.55+Math.random()*0.45;
+    const decohere=isGlitching && Math.random()<0.22;
+    const offX = decohere ? (Math.random()-.5)*14 : 0;
+    cx.fillStyle = decohere
+      ? `rgba(${l},${Math.round(l*0.2)},${Math.round(l*0.2)},${a})`
+      : `rgba(${l},${l},${l},${a})`;
+    cx.fillRect(jit+dx*7+offX, dy*7, 6, 6);
+  });
+
+  // Chromatic aberration ghost (red channel shifted right, blue left)
+  if(g.chromaOff > 1) {
+    cx.globalAlpha=0.14;
+    FRAG_CELLS.forEach(([dx,dy]) => {
+      cx.fillStyle=`rgba(${l},0,0,1)`;   cx.fillRect(dx*7+g.chromaOff*0.45,dy*7,6,6);
+      cx.fillStyle=`rgba(0,0,${l},1)`;   cx.fillRect(dx*7-g.chromaOff*0.45,dy*7,6,6);
+    });
+    cx.globalAlpha=1;
+  }
+
+  // Gravity indicator: small chevron below/above
+  cx.font='9px Courier New'; cx.textAlign='center';
+  cx.fillStyle=`rgba(${l},${l},${l},0.3)`;
+  cx.fillText(p.gravDir===1?'▼':'▲', 0, p.gravDir===1?28:-22);
+
+  cx.restore();
+};
+
+// ── DRAW MIMIC ────────────────────────────────────────
+const drawMimic = () => {
+  if(!mimic.on || mimic.alpha<0.01) return;
+  const l=lum();
+  cx.save(); cx.globalAlpha=mimic.alpha;
+  cx.translate(Math.round(mimic.x),Math.round(mimic.y));
+  FRAG_CELLS.forEach(([dx,dy]) => {
+    cx.fillStyle=`rgba(${l},${l},${l},0.28)`;
+    cx.fillRect(dx*7,dy*7,6,6);
+  });
+  cx.font='8px Courier New'; cx.textAlign='center';
+  cx.fillStyle=`rgba(${l},${l},${l},0.5)`;
+  cx.fillText('NOT_YOU',0,-26);
+  cx.restore();
+};
+
+// ── DRAW GLITCH MESSAGE ───────────────────────────────
+const drawGlitchMsg = () => {
+  if(!g.active || g.alpha<0.01) return;
+  const l=lum();
+  const positions=[
+    [WALL+18, H/2],
+    [W-WALL-18, H/2],
+    [W/2, WALL+36],
+    [W/2, H-FLOOR-22],
+  ];
+  const pos=positions[Math.floor(t*3.2)%positions.length];
+  cx.save(); cx.globalAlpha=g.alpha*0.75;
+  cx.font=`bold 11px Courier New`;
+  // Corrupt the message
+  const corrupted=g.msg.split('').map(c=>Math.random()<0.07?String.fromCharCode(33+Math.floor(Math.random()*90)):c).join('');
+  cx.fillStyle=`rgb(${l},${l},${l})`;
+  cx.textAlign='center';
+  cx.fillText(corrupted, pos[0]+(Math.random()-.5)*5, pos[1]+(Math.random()-.5)*4);
+  // Occasionally double the text offset = ghost effect
+  if(Math.random()<0.4) {
+    cx.globalAlpha=g.alpha*0.22;
+    cx.fillText(corrupted, pos[0]+g.chromaOff*0.3, pos[1]);
+  }
+  cx.restore();
+};
+
+// ── DRAW METADATA ─────────────────────────────────────
+const drawMeta = () => {
+  const l=Math.max(50,Math.round(lum(0.65)));
+  cx.font='10px Courier New'; cx.textAlign='left';
+  const jitLat=(Math.random()-.5)*0.000025;
+  const jitLng=(Math.random()-.5)*0.000025;
+  const lines=[
+    `LAT: ${(meta.lat+jitLat).toFixed(6)}`,
+    `LNG: ${(meta.lng+jitLng).toFixed(6)}`,
+    `MEM: ${meta.mem}%  [${Math.random()<0.04?'LEAK_DETECTED':'NOMINAL'}]`,
+    `PID: ${meta.pid}`,
+    `HR.: ${Math.round(meta.hr+(Math.random()-.5)*4)} BPM`,
+    `FRQ: ${meta.freq+Math.floor(Math.random()*3-1)} Hz`,
+    `SUB: 101`,
+    `STA: MONITORED`,
+  ];
+  const base=H-FLOOR-14;
+  lines.forEach((line,i) => {
+    if(Math.random()>0.03) {
+      cx.fillStyle=`rgba(${l},${l},${l},${0.28+Math.random()*0.15})`;
+      cx.fillText(line, 8, base-(lines.length-1-i)*14);
+    }
+  });
+};
+
+// ── SOVIET ARCHIVE DRAW ───────────────────────────────
+const drawArchive = () => {
+  const d = DOCS[archive.doc];
+  if(!d) return;
+  const lines = archiveFullText(d);
+
+  // Aged paper background
+  cx.fillStyle='#0a0a08'; cx.fillRect(0,0,W,H);
+
+  // Paper sheet
+  const pw = Math.min(820, W*0.82), ph = Math.min(H*0.88, 760);
+  const px = W/2-pw/2, py = H/2-ph/2;
+
+  // Shadow
+  cx.fillStyle='rgba(0,0,0,0.7)'; cx.fillRect(px+7,py+7,pw,ph);
+
+  // Paper body
+  const paperGrad = cx.createLinearGradient(px,py,px+pw,py+ph);
+  paperGrad.addColorStop(0,'#c8c0a8'); paperGrad.addColorStop(0.4,'#bfb89a'); paperGrad.addColorStop(1,'#b0a88c');
+  cx.fillStyle=paperGrad; cx.fillRect(px,py,pw,ph);
+
+  // Grain
+  cx.save();
+  for(let i=0;i<ph;i+=2){ cx.fillStyle=`rgba(0,0,0,${Math.random()*0.035})`; cx.fillRect(px,py+i,pw,1); }
+  // Water stains
+  const sg=cx.createRadialGradient(px+pw*0.78,py+ph*0.14,8,px+pw*0.78,py+ph*0.14,90);
+  sg.addColorStop(0,'rgba(100,85,50,0.13)'); sg.addColorStop(1,'rgba(100,85,50,0)');
+  cx.fillStyle=sg; cx.fillRect(px,py,pw,ph);
+  const sg2=cx.createRadialGradient(px+pw*0.12,py+ph*0.88,4,px+pw*0.12,py+ph*0.88,60);
+  sg2.addColorStop(0,'rgba(80,65,40,0.11)'); sg2.addColorStop(1,'rgba(80,65,40,0)');
+  cx.fillStyle=sg2; cx.fillRect(px,py,pw,ph);
+  cx.restore();
+
+  // Border lines
+  cx.strokeStyle='rgba(60,50,30,0.35)'; cx.lineWidth=1; cx.strokeRect(px+28,py+28,pw-56,ph-56);
+  cx.strokeStyle='rgba(60,50,30,0.18)'; cx.lineWidth=0.5; cx.strokeRect(px+32,py+32,pw-64,ph-64);
+
+  // Diagonal stamp
+  cx.save();
+  cx.translate(px+pw*0.76,py+ph*0.13); cx.rotate(0.35);
+  cx.strokeStyle='rgba(160,30,20,0.72)'; cx.lineWidth=2.8;
+  cx.strokeRect(-97,-24,195,48);
+  cx.font='bold 15px Courier New'; cx.textAlign='center'; cx.fillStyle='rgba(160,30,20,0.72)';
+  cx.fillText(d.stamp,0,-5);
+  cx.font='10px Courier New'; cx.fillText(d.stampEn,0,11);
+  cx.restore();
+
+  // Circular seal
+  cx.save();
+  cx.translate(px+pw-72,py+ph-72);
+  cx.strokeStyle='rgba(120,25,18,0.45)'; cx.lineWidth=2;
+  cx.beginPath(); cx.arc(0,0,38,0,Math.PI*2); cx.stroke();
+  cx.beginPath(); cx.arc(0,0,30,0,Math.PI*2); cx.stroke();
+  cx.font='bold 16px Courier New'; cx.textAlign='center'; cx.fillStyle='rgba(120,25,18,0.50)';
+  cx.fillText(d.seal,0,6);
+  for(let a=0;a<Math.PI*2;a+=Math.PI/8){ cx.beginPath(); cx.arc(Math.cos(a)*34,Math.sin(a)*34,1.5,0,Math.PI*2); cx.fillStyle='rgba(120,25,18,0.38)'; cx.fill(); }
+  cx.restore();
+
+  // Header block
+  const tx=px+52, ty=py+55;
+  cx.textAlign='left';
+  cx.font='bold 11px Courier New'; cx.fillStyle='rgba(20,18,10,0.88)'; cx.fillText(d.org,tx,ty);
+  cx.font='10px Courier New'; cx.fillStyle='rgba(20,18,10,0.62)'; cx.fillText(d.orgEn,tx,ty+15);
+  cx.fillStyle='rgba(30,22,10,0.4)'; cx.fillRect(tx,ty+22,pw-104,1);
+  cx.font='10px Courier New'; cx.fillStyle='rgba(20,18,10,0.72)';
+  cx.fillText(d.ref,tx,ty+36); cx.fillText(d.date,tx,ty+50);
+  cx.fillStyle='rgba(30,22,10,0.35)'; cx.fillRect(tx,ty+60,pw-104,1);
+  cx.font='bold 12px Courier New'; cx.fillStyle='rgba(20,18,10,0.88)'; cx.fillText(d.subject,tx,ty+76);
+  cx.font='10px Courier New'; cx.fillStyle='rgba(20,18,10,0.62)'; cx.fillText(d.subjectEn,tx,ty+90);
+  cx.fillStyle='rgba(30,22,10,0.35)'; cx.fillRect(tx,ty+98,pw-104,1);
+
+  // Body text reveal
+  const bodyLines = lines.slice(9);
+  let drawn = 0;
+  const charsToShow = archive.charIdx;
+  cx.font='11.5px Courier New';
+  const lineH=19, bodyY=ty+116;
+  bodyLines.forEach((line,i) => {
+    if(drawn > charsToShow) return;
+    const isRedact = d.redact && d.redact.includes(i);
+    if(drawn+line.length <= charsToShow) {
+      if(isRedact) {
+        cx.fillStyle='rgba(18,14,8,0.88)';
+        cx.fillRect(tx, bodyY+i*lineH-13, Math.max(line.length*7.1,220), lineH-2);
+      } else {
+        cx.fillStyle = i%5===0 ? 'rgba(18,14,8,0.65)' : 'rgba(18,14,8,0.82)';
+        cx.fillText(line,tx,bodyY+i*lineH);
+      }
+      drawn += line.length+1;
+    } else {
+      const partial = line.slice(0, charsToShow-drawn);
+      cx.fillStyle='rgba(18,14,8,0.82)'; cx.fillText(partial,tx,bodyY+i*lineH);
+      if(Math.floor(t*3)%2===0){ const cw=cx.measureText(partial).width; cx.fillStyle='rgba(18,14,8,0.75)'; cx.fillRect(tx+cw+1,bodyY+i*lineH-12,8,14); }
+      drawn=charsToShow+999;
+    }
+  });
+
+  // Watermark
+  cx.save(); cx.translate(W/2,H/2); cx.rotate(-0.32);
+  cx.font='bold 28px Courier New'; cx.textAlign='center'; cx.fillStyle='rgba(60,50,30,0.045)';
+  [-55,0,55].forEach(dy => cx.fillText('TRANSLATED FROM RUSSIAN',0,dy));
+  cx.restore();
+
+  // Footer
+  cx.font='9px Courier New'; cx.textAlign='right'; cx.fillStyle='rgba(20,18,10,0.42)';
+  cx.fillText(`[ DOCUMENT ${archive.doc+1} OF ${DOCS.length} ]`,px+pw-36,py+ph-38);
+  cx.textAlign='left'; cx.fillText('ARCHIVE REF: ЦА-7731/101',px+52,py+ph-38);
+
+  // Press-any-key hint on last doc, when fully typed
+  if(archive.doc === DOCS.length-1 && archive.phase===1) {
+    const a = 0.4+Math.sin(t*3)*0.3;
+    cx.font='11px Courier New'; cx.textAlign='center'; cx.fillStyle=`rgba(18,14,8,${a})`;
+    cx.fillText('[ PRESS ANY KEY TO ENTER THE TERMINAL ]', W/2, py+ph-14);
+  }
+
+  // Fade overlay
+  if(archive.phase===2){ cx.fillStyle=`rgba(0,0,0,${1-archive.fadeAlpha})`; cx.fillRect(0,0,W,H); }
+
+  scanlines();
+};
+
+// ── INTRO ─────────────────────────────────────────────
+const drawIntro = () => {
+  cx.fillStyle='#000'; cx.fillRect(0,0,W,H);
+  if(intro.phase<1){ scanlines(); return; }
+
+  const l=152;
+  cx.font='13px Courier New'; cx.textAlign='center';
+
+  // Lines appear over time
+  const vis=Math.floor(intro.timer*1.6);
+  intro.lines.slice(0,vis).forEach((line,i) => {
+    const flk=Math.random()>0.96 ? 0.25 : 1;
+    cx.fillStyle=`rgba(${l},${l},${l},${0.82*flk})`;
+    cx.fillText(line, W/2, H*0.18+i*27);
+  });
+
+  // Loading bar
+  if(intro.phase>=2) {
+    const bw=W*0.38, bh=16, bx=W/2-bw/2, by=H*0.74;
+    cx.strokeStyle=`rgba(${l},${l},${l},0.45)`; cx.lineWidth=1;
+    cx.strokeRect(bx,by,bw,bh);
+    cx.fillStyle=`rgba(${l},${l},${l},0.65)`;
+    cx.fillRect(bx,by,bw*intro.load,bh);
+    cx.font='9px Courier New';
+    cx.fillStyle=`rgba(${l},${l},${l},0.5)`;
+    cx.fillText(`LOADING SENSORY ENGINE... ${Math.round(intro.load*100)}%`, W/2, by+bh+18);
+    cx.fillText(`[PRESS ANY KEY TO EXPEDITE]`, W/2, by+bh+33);
+  }
+  scanlines();
+};
+
+// ── ERROR SCREEN ──────────────────────────────────────
+const drawError = () => {
+  cx.fillStyle='#000'; cx.fillRect(0,0,W,H);
+  if(!err) return;
+
+  if(err.phase===2) {
+    cx.fillStyle=`rgba(0,0,0,${1-err.fadeAlpha})`; cx.fillRect(0,0,W,H);
+  }
+
+  const l=168; cx.font='13px Courier New'; cx.textAlign='left';
+  const sx=W*0.15, sy=H*0.14;
+
+  err.lines.slice(0,err.shown).forEach((line,i) => {
+    if(Math.random()>0.985) return; // flicker
+    const bright = line.startsWith('>') ? l : Math.round(l*0.78);
+    const isHR = line.includes('HEART_RATE');
+    cx.fillStyle = isHR
+      ? `rgba(210,210,210,0.95)`
+      : `rgba(${bright},${bright},${bright},0.85)`;
+    const jitX = Math.random()>0.99 ? (Math.random()-.5)*8 : 0;
+    cx.fillText(line, sx+jitX, sy+i*23);
+  });
+
+  // Blinking cursor
+  if(Math.floor(t*2)%2===0 && err.shown<err.lines.length) {
+    cx.fillStyle=`rgba(180,180,180,0.9)`;
+    cx.fillRect(sx, sy+err.shown*23-13, 10, 15);
+  }
+  scanlines();
+};
+
+// ── RENDER ────────────────────────────────────────────
+const render = () => {
+  if(state==='archive'){ drawArchive(); return; }
+  if(state==='intro'){ drawIntro(); return; }
+  if(state==='error'){ drawError(); return; }
+
+  cx.save();
+  const sx=g.shakeAmt>0.5?(Math.random()-.5)*g.shakeAmt:0;
+  const sy=g.shakeAmt>0.5?(Math.random()-.5)*g.shakeAmt:0;
+  cx.translate(sx,sy);
+
+  if(g.staticFrames>0){ noise(0.94); cx.restore(); return; }
+
+  drawRoom();
+  drawDoor();
+  drawDuck();
+  drawMimic();
+  drawFragment();
+  drawGlitchMsg();
+  glitchLines();
+  scanlines();
+  vignette();
+  noise(g.noiseLevel);
+  drawMeta();
+
+  cx.restore();
+};
+
+// ── MAIN LOOP ─────────────────────────────────────────
+const loop = ts => {
+  const dt=Math.min((ts-last)/1000, 0.05); last=ts; t+=dt;
+
+  if(state==='archive') {
+    const d = DOCS[archive.doc];
+    const lines = archiveFullText(d);
+    const bodyLines = lines.slice(9);
+    const totalChars = bodyLines.join('\n').length;
+
+    if(archive.phase===0) {
+      // Typewriter speed: ~42 chars/sec
+      archive.charIdx = Math.min(archive.charIdx + dt*42, totalChars);
+      if(archive.charIdx >= totalChars) {
+        archive.phase=1; archive.timer=0;
+        // Play a low drone on each document reveal
+        playDrone(33+archive.doc*8, 3.0, 0.06);
+      }
+    } else if(archive.phase===1) {
+      archive.timer+=dt;
+      // Last doc waits for keypress — others auto-advance after 3.8s
+      if(archive.doc < DOCS.length-1 && archive.timer>3.8) {
+        archive.phase=2; archive.fadeAlpha=1;
+      }
+    } else if(archive.phase===2) {
+      archive.fadeAlpha = Math.max(0, archive.fadeAlpha - dt*1.1);
+      if(archive.fadeAlpha<=0) {
+        archive.doc++;
+        if(archive.doc >= DOCS.length) {
+          state='intro'; // last doc → enter terminal
+        } else {
+          archive.charIdx=0; archive.phase=0; archive.timer=0; archive.fadeAlpha=1;
+          playStaticBurst(0.08);
+        }
+      }
+    }
+  }
+
+  if(state==='intro') {
+    intro.timer+=dt;
+    if(intro.timer>0.7 && intro.phase===0) intro.phase=1;
+    if(intro.timer>1.6 && intro.phase===1) intro.phase=2;
+    intro.load=Math.min(intro.load+dt*0.11,1);
+    if(intro.load>=1 && intro.timer>5.5){ state='game'; resetP(); }
+  }
+
+  if(state==='error' && err) {
+    err.timer+=dt;
+    if(err.phase===0) {
+      if(err.timer>0.21 && err.shown<err.lines.length){ err.shown++; err.timer=0; if(err.shown===1)playStaticBurst(); if(err.shown===6)playGlitchTone(); }
+      if(err.shown>=err.lines.length){ err.phase=1; err.timer=0; }
+    } else if(err.phase===1) {
+      if(err.timer>2.8){ err.phase=2; err.timer=0; }
+    } else if(err.phase===2) {
+      err.fadeAlpha=Math.max(0,err.fadeAlpha-dt*0.55);
+      if(err.fadeAlpha<=0){ state='game'; resetP(); }
+    }
+  }
+
+  if(state==='game') update(dt);
+  render();
+  requestAnimationFrame(loop);
+};
+requestAnimationFrame(ts=>{ last=ts; loop(ts); });
+
+// ── INPUT ─────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  e.preventDefault();
+  try{ aud(); }catch(ex){}
+  if(state==='archive') {
+    // Skip typing animation on current doc
+    const d = DOCS[archive.doc];
+    const lines = archiveFullText(d);
+    const totalChars = lines.slice(9).join('\n').length;
+    if(archive.phase===0) {
+      archive.charIdx = totalChars; // skip to end
+    } else if(archive.phase===1 && archive.doc===DOCS.length-1) {
+      // Last doc: any key advances to intro
+      archive.phase=2; archive.fadeAlpha=1;
+    } else if(archive.phase===1) {
+      archive.phase=2; archive.fadeAlpha=1;
+    }
+    return;
+  }
+  if(state==='intro'){
+    intro.load=Math.min(intro.load+0.18,1); intro.timer+=0.55;
+    return;
+  }
+  if(state==='error') return;
+  const k=e.key.toLowerCase();
+  const fn=kmap[k];
+  if(fn) fn();
+});
+</script>
+</body>
+</html>
